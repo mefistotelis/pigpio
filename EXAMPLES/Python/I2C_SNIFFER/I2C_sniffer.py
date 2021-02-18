@@ -148,21 +148,27 @@ class sniffer:
       self.cbA.cancel()
       self.cbB.cancel()
 
-if __name__ == "__main__":
-
-   import time
-
-   import pigpio
-
+def main():
    import I2C_sniffer
 
    pi = pigpio.pi()
 
-   s = I2C_sniffer.sniffer(pi, 1, 0, False) # leave gpios 1/0 in I2C mode
+   # The 2nd parameter needs to be the gpio for SCL
+   # The 3rd parameter needs to be the gpio for SDA
+   # The 4th parameter needs to be False if you are using the I2C gpios, True otherwise.
+   s = I2C_sniffer.sniffer(pi, 3, 2, False) # leave gpios 3/2 in I2C mode
 
-   time.sleep(60000)
+   try:
+      time.sleep(60000)
+   except KeyboardInterrupt:
+       pass
+
+   print()
 
    s.cancel()
 
    pi.stop()
 
+
+if __name__ == "__main__":
+    main()
