@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 
 import time
 
@@ -9,6 +9,11 @@ class sniffer:
    A class to passively monitor activity on an I2C bus.  This should
    work for an I2C bus running at 100kbps or less.  You are unlikely
    to get any usable results for a bus running any faster.
+
+   It needs the pigpio daemon to be running.
+   See `ps -A -o pid,user,args | grep pigpio` to be sure it is.
+
+   See __init__() documentation for output format.
    """
 
    def __init__(self, pi, SCL, SDA, set_as_inputs=True):
@@ -23,7 +28,7 @@ class sniffer:
       The pigpio daemon should have been started with a higher
       than default sample rate.
 
-      For an I2C bus rate of 100Kbps sudo pigpiod -s 2 should work.
+      For an I2C bus rate of 100Kbps, `sudo pigpiod -s 2` should work.
 
       A message is printed for each I2C transaction formatted with
       "[" for the START
