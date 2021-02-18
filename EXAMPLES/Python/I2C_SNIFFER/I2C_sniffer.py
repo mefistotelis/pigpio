@@ -51,97 +51,124 @@ class sniffer:
       self.STEADY = 2
 
       self.in_data = False
+      self.in_ack = False
       self.byte = 0
       self.bit = 0
       self.oldSCL = 1
       self.oldSDA = 1
 
       self.transact = ""
+      self.last_sda_tick = 0
+      self.last_start_tick = 0
 
       if set_as_inputs:
          self.pi.set_mode(SCL, pigpio.INPUT)
          self.pi.set_mode(SDA, pigpio.INPUT)
 
-      self.cbA = self.pi.callback(SCL, pigpio.EITHER_EDGE, self._cb)
-      self.cbB = self.pi.callback(SDA, pigpio.EITHER_EDGE, self._cb)
+      self.cbA = self.pi.callback(SCL, pigpio.EITHER_EDGE, self._cbSCL)
+      self.cbB = self.pi.callback(SDA, pigpio.EITHER_EDGE, self._cbSDA)
 
-   def _parse(self, SCL, SDA):
-      """
-      Accumulate all the data between START and STOP conditions
-      into a string and output when STOP is detected.
-      """
 
-      if SCL != self.oldSCL:
-         self.oldSCL = SCL
-         if SCL:
-            xSCL = self.RISING
-         else:
-            xSCL = self.FALLING
-      else:
-            xSCL = self.STEADY
-
-      if SDA != self.oldSDA:
-         self.oldSDA = SDA
-         if SDA:
-            xSDA = self.RISING
-         else:
-            xSDA = self.FALLING
-      else:
-            xSDA = self.STEADY
-
-      if xSCL == self.RISING:
-         if self.in_data:
-            if self.bit < 8:
-               self.byte = (self.byte << 1) | SDA
-               self.bit += 1
-            else:
-               self.transact += '{:02X}'.format(self.byte)
-               if SDA:
-                  self.transact += '-'
-               else:
-                  self.transact += '+'
-               self.bit = 0
-               self.byte = 0
-
-      elif xSCL == self.STEADY:
-
-         if xSDA == self.RISING:
-            if SCL:
-               self.in_data = False
-               self.byte = 0
-               self.bit = 0
-               self.transact += ']' # STOP
-               print (self.transact)
-               self.transact = ""
-
-         if xSDA == self.FALLING:
-            if SCL:
-               self.in_data = True
-               self.byte = 0
-               self.bit = 0
-               self.transact += '[' # START
-
-   def _cb(self, gpio, level, tick):
+   def _cbSDA(self, gpio, level, tick):
       """
       Check which line has altered state (ignoring watchdogs) and
       call the parser with the new state.
       """
+      #tick = int(time.time() * 1000000)
       SCL = self.oldSCL
-      SDA = self.oldSDA
 
-      if gpio == self.gSCL:
-         if level == 0:
+      if level == 0:
+         SDA = 0
+      elif level == 1:
+         SDA = 1
+      else:
+         return
+
+      if True:
+         if (self.in_data) and (tick - self.last_sda_tick > 4000):
+             if self.bit > 0:
+                 self.transact += '{:02X}'.format(self.byte << (8-self.bit))
+                 self.bit = 0
+                 self.byte = 0
+             self.transact += ' !to' # TIMEOUT
+             print (self.transact)
+             self.transact = ""
+         self.last_sda_tick = tick
+
+      if SDA != self.oldSDA:
+         self.oldSDA = SDA
+         if SDA: # rising edge of SDA
+             if SCL:
+                 if self.in_data: # Proper STOP bit
+                     if self.in_ack: # ACK should be before STOP; but if we failed to get it, do it now
+                         self.transact += '-'
+                         self.in_ack = False
+                     self.in_data = False
+                     if self.bit > 1: # On STOP, SCL goes up first, so we should've counted one bit
+                         self.transact += '{:02X}'.format(self.byte)
+                         self.transact += ' !{:d}tr'.format(self.bit) # TRUNCATED DATA
+                     self.bit = 0
+                     self.byte = 0
+                 else: # Misplaced STOP bit
+                     pass
+                 self.transact += ']' # STOP
+                 print(self.transact)
+                 self.transact = ""
+         else: # falling edge of SDA
+             if SCL:
+                 if self.in_ack: # This is not START, but misinterpreted ACK
+                     pass # Ignore it, next SCL change will handle this
+                 elif not self.in_data: # Packet begin START bit
+                     self.last_start_tick = tick
+                     self.in_data = True
+                     self.in_ack = False
+                     self.byte = 0
+                     self.bit = 0
+                     if self.transact == '':
+                         self.transact = '{:7.03f}: '.format(float(tick)/1000000)
+                     self.transact += '[' # START
+                 else:
+                     if self.bit <= 1: # READ begin START bit
+                         self.byte = 0
+                         self.bit = 0
+                         self.transact += '[' # START
+                     else: # unexpected START inside of data - misinterpreted data
+                         self.transact += ' !{:d}md'.format(self.bit) # MISINTERPRETED DATA
+                         pass
+
+
+   def _cbSCL(self, gpio, level, tick):
+        """
+        Add data on rising clock edge, or check ACK on falling one.
+        """
+        SDA = self.oldSDA
+
+        if level == 0:
             SCL = 0
-         elif level == 1:
+        elif level == 1:
             SCL = 1
+        else:
+            return
 
-      if gpio == self.gSDA:
-         if level == 0:
-            SDA = 0
-         elif level == 1:
-            SDA = 1
+        self.oldSCL = SCL
+        if SCL: # rising edge of SCL - read data bytes on this edge
+            if self.in_data:
+                if self.bit < 8:
+                    self.byte = (self.byte << 1) | SDA
+                    self.bit += 1
+                else:
+                    self.in_ack = True
+                    self.bit = 0
+                    self.transact += '{:02X}'.format(self.byte)
+                    self.byte = 0
+        else: # falling edge of SCL - read ACK on this edge
+            if self.in_ack:
+                if SDA:
+                    self.transact += '-'
+                else:
+                    self.transact += '+'
+                self.in_ack = False
 
-      self._parse(SCL, SDA)
 
    def cancel(self):
       """Cancel the I2C callbacks."""
