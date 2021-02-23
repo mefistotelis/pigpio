@@ -1,7 +1,6 @@
 #!/usr/bin/env python2
 
 import time
-
 import pigpio
 
 class sniffer:
@@ -60,6 +59,7 @@ class sniffer:
       self.transact = ""
       self.last_sda_tick = 0
       self.last_start_tick = 0
+      self.SCL_since_start = 0
 
       if set_as_inputs:
          self.pi.set_mode(SCL, pigpio.INPUT)
@@ -87,10 +87,10 @@ class sniffer:
       if True:
          if (self.in_data) and (tick - self.last_sda_tick > 4000):
              if self.bit > 0:
-                 self.transact += '{:02X}'.format(self.byte << (8-self.bit))
+                 self.transact += "{:02X}".format(self.byte << (8-self.bit))
                  self.bit = 0
                  self.byte = 0
-             self.transact += ' !to' # TIMEOUT
+             self.transact += " !to" # TIMEOUT
              print (self.transact)
              self.transact = ""
          self.last_sda_tick = tick
@@ -105,13 +105,15 @@ class sniffer:
                          self.in_ack = False
                      self.in_data = False
                      if self.bit > 1: # On STOP, SCL goes up first, so we should've counted one bit
-                         self.transact += '{:02X}'.format(self.byte)
-                         self.transact += ' !{:d}tr'.format(self.bit) # TRUNCATED DATA
+                         self.transact += "{:02X}".format(self.byte)
+                         self.transact += " !{:d}tr".format(self.bit) # TRUNCATED DATA
                      self.bit = 0
                      self.byte = 0
                  else: # Misplaced STOP bit
                      pass
-                 self.transact += ']' # STOP
+                 self.transact += "]" # STOP
+                 # estimate baud rate
+                 self.transact += " baud={:d}".format(1000000 * (self.SCL_since_start/2) / (tick - self.last_start_tick + 1))
                  print(self.transact)
                  self.transact = ""
          else: # falling edge of SDA
@@ -120,20 +122,21 @@ class sniffer:
                      pass # Ignore it, next SCL change will handle this
                  elif not self.in_data: # Packet begin START bit
                      self.last_start_tick = tick
+                     self.SCL_since_start = 0
                      self.in_data = True
                      self.in_ack = False
                      self.byte = 0
                      self.bit = 0
-                     if self.transact == '':
-                         self.transact = '{:7.03f}: '.format(float(tick)/1000000)
-                     self.transact += '[' # START
+                     if self.transact == "":
+                         self.transact = "{:7.03f}: ".format(float(tick)/1000000)
+                     self.transact += "[" # START
                  else:
                      if self.bit <= 1: # READ begin START bit
                          self.byte = 0
                          self.bit = 0
-                         self.transact += '[' # START
+                         self.transact += "[" # START
                      else: # unexpected START inside of data - misinterpreted data
-                         self.transact += ' !{:d}md'.format(self.bit) # MISINTERPRETED DATA
+                         self.transact += " !{:d}md".format(self.bit) # MISINTERPRETED DATA
                          pass
 
 
@@ -168,6 +171,7 @@ class sniffer:
                 else:
                     self.transact += '+'
                 self.in_ack = False
+        self.SCL_since_start += 1
 
 
    def cancel(self):
